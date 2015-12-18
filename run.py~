@@ -32,13 +32,12 @@ if __name__ == '__main__':
         port += 2
         ip_list.append(ip)
     for index,port in enumerate(port_list):
-        time.sleep(10)
         if index<entry_num:
             p = Node(port,ip_list,port_list,1,total_num,entry_num,exit_num)
-            p.start()
+            #p.start()
         else:
             p = Node(port,ip_list,port_list,total_num,entry_num,exit_num)
-            p.start()
+            #p.start()
 
 
 

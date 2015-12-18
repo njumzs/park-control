@@ -44,21 +44,8 @@ class Node(threading.Thread):
         self.inCritical = 0 #Not in critical region
         self.message_queue = []
         self.update_repley_procset = set()
-        self.frame = Tk()
-        text = "Process "+str(os.getpid())
-        button_text = ''
-        if self.end_type == 0:
-            text += ": exit:"
-            button_text = 'Leave now'
-        else:
-            text += ": entry:"
-            button_text = 'Enter now'
-        self.frame.title(text)
-        self.frame.geometry('400x300')
-        self.text_plane = Text(self.frame)
-        self.text_plane.pack()
-        Button(self.frame, text=button_text,command=self.ask_for_cri).pack()
-        Button(self.frame, text="State Info",command=self.get_state).pack()
+        self.start()
+        
 
     def set_coordinator(self):
         self.isCoorn = True
@@ -232,6 +219,10 @@ class Node(threading.Thread):
     def update_textplane(self,text):
         self.text_plane.insert(1.0,text)
 
+    def quit(self):
+        self.frame.destroy()
+        self.frame.quit()   
+        
     def get_state(self):
         text = "TOTAL_NUM: "+str(self.state.tatal_num)+", ENTRY_NUM: "+str(self.state.entry_num)+", EXIT_NUM: "+str(self.state.exit_num)
         self.update_textplane(text)
@@ -240,6 +231,22 @@ class Node(threading.Thread):
 
 
     def run(self):
+        time.sleep(1)
+        self.frame = Tk()
+        text = "Process "+str(os.getpid())
+        button_text = ''
+        if self.end_type == 0:
+            text += ": exit:"
+            button_text = 'Leave now'
+        else:
+            text += ": entry:"
+            button_text = 'Enter now'
+        self.frame.title(text)
+        self.frame.geometry('700x600')
+        self.text_plane = Text(self.frame)
+        self.text_plane.pack()
+        Button(self.frame, text=button_text,command=self.ask_for_cri).pack()
+        Button(self.frame, text="State Info",command=self.get_state).pack()
         #s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         #time.sleep(4)
         print 'ip port'+str(self.ip)+' '+str(self.port)

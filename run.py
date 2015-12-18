@@ -34,10 +34,10 @@ if __name__ == '__main__':
     for index,port in enumerate(port_list):
         if index<entry_num:
             p = Node(port,ip_list,port_list,1,total_num,entry_num,exit_num)
-            p.start()
+            #p.start()
         else:
-            p = Node(port,ip_list,port_list,total_num,entry_num,exit_num)
-            p.start()
+            p = Node(port,ip_list,port_list,0,total_num,entry_num,exit_num)
+            #p.start()
 
 
 
