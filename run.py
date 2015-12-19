@@ -24,7 +24,7 @@ if __name__ == '__main__':
     entry_num = int(sys.argv[2])
     exit_num = int(sys.argv[3])
     port = 10003
-    ip = '127.0.0.1'
+    ip = 'localhost'
     port_list = []
     ip_list = []
     for i in range(entry_num+exit_num):

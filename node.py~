@@ -9,7 +9,7 @@
 #from multiprocessing import Process
 #import multiprocessing
 from stateInfo import StateInfo
-from message import Message
+from message import MessageData
 from collections import defaultdict
 import socket
 import threading
@@ -22,9 +22,15 @@ try:
     import cPickle as pickle
 except ImportError:
     import pickle
+ACK_CRI_TYPE = 1  #New car come in or out
+PARK_UPDATE_TYPE = 2 # Broadcast to let other nodes update TOTAL_PARK
+ACK_REPLY_TYPE = 3   #In or out reply
+REJECT_REPLY_TYPE = 4 #Critical is used and  wait
+UPDATE_REPLY_TYPE = 5
+LEAVE_TYPE = 6  #Leave the critical region
 
 class Node(threading.Thread):
-    def __init__(self,frame,port=-1,ip_list=None,port_list=None,end_type=0,total_num=0,entry_num=0,exit_num=0):
+    def __init__(self,port=-1,ip_list=None,port_list=None,end_type=0,total_num=0,entry_num=0,exit_num=0):
         """
         end_type 0 is exit, 1 is entry
 
@@ -44,8 +50,11 @@ class Node(threading.Thread):
         self.inCritical = 0 #Not in critical region
         self.message_queue = []
         self.update_repley_procset = set()
+        self.max_num = total_num
+        if self.port == max(self.port_list):
+            self.set_coordinator()
         self.start()
-        
+
 
     def set_coordinator(self):
         self.isCoorn = True
@@ -55,29 +64,30 @@ class Node(threading.Thread):
     def sort_insert2waitqueue(self,message):
         if not self.wait_queue:
             self.wait_queue.append(message)
-        elif self.wait_queue[0].timestamp > message.timestamp:
+        elif self.wait_queue[0].data[1] > message.data[1]:
             self.wait_queue.insert(0,message)
-        elif self.wait_queue[len(self.wait_queue)-1] < message.timestamp:
+        elif self.wait_queue[len(self.wait_queue)-1].data[1] < message.data[1]:
             self.wait_queue.append(message)
         else:
             for index in range(len(self.wait_queue)-1):
-                if self.wait_queue[index].timestamp < message.timestamp and self.wait_queue[index+1] > message.timestamp:
+                if self.wait_queue[index].data[1] < message.data[1] and self.wait_queue[index+1].data[1] > message.data[1]:
                     self.wait_queue.insert(index,message)
 
     def sort_insert2messqueue(self,message):
         if not self.message_queue:
             self.message_queue.append(message)
-        elif self.message_queue[0].timestamp > message.timestamp:
+        elif self.message_queue[0].data[1] > message.data[1]:
             self.message_queue.insert(0,message)
-        elif self.message_queue[len(self.message_queue)-1] < message.timestamp:
+        elif self.message_queue[len(self.message_queue)-1].data[1] < message.data[1]:
             self.message_queue.append(message)
         else:
             for index in range(len(self.message_queue)-1):
-                if self.message_queue[index].timestamp < message.timestamp and self.message_queue[index+1] > message.timestamp:
+                if self.message_queue[index].data[1] < message.data[1] and self.message_queue[index+1].data[1] > message.data[1]:
                     self.message_queue.insert(index,message)
 
+
     def send_message(self,ip,port,message):
-        s = socket.socket(socket.AF_INEF, socket.SOCK_STREAM)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((ip,port))
         data = pickle.dumps(message)
         s.send(data)
@@ -85,8 +95,6 @@ class Node(threading.Thread):
 
     def update_lamport_clock(self,message):
         data = message.data
-        current_proc = os.getpid()
-        source_proc = data[0]
         timestamp = data[1]
         #update clock
         self.counter = max(timestamp,self.counter)
@@ -96,169 +104,218 @@ class Node(threading.Thread):
 
     def process_mess(self):
         while True:
-            while True:
-                if self.reject_critical:
-                    break
+            #sprint("process_mess "+str(len(self.message_queue)))
             if self.message_queue:
                 message = self.message_queue[0]
+                while True:
+                    if message.mess_type == PARK_UPDATE_TYPE:
+                        break
+                    if not self.reject_critical:
+                        break
                 self.message_queue.remove(message)
-                if message.mess_type == ASK_CRI_TYPE:  # a node trys to enter the critical
+                if message.mess_type == ACK_CRI_TYPE:  # a node trys to enter the critical
                     if self.isCoorn: #Coordinator
                         data = message.data
                         pro_id = data[0]
                         src_ip = data[2]
                         src_port = data[3]
-                        if self.cri_proc and not self.cri_proc == pro_id: # wait
+                        self.update_textplane("<->node "+str(src_port)+" want to enter c_r\n")
+                        if self.cri_proc and not self.cri_proc == src_port: # wait
                             #sorted wait queue
                             data = []
+                            data.append(os.getpid())
                             data.append(self.counter)
                             data.append(self.ip)
                             data.append(self.port)
-                            reject_message = Message(REJECT_REPLY_TYPE,self.stateInfo,data)
+                            reject_message = MessageData(REJECT_REPLY_TYPE,self.state,data)
                             self.send_message(src_ip,src_port,reject_message)
                             self.sort_insert2waitqueue(message)
                         else: # enter the critical region okay
+                            self.update_textplane("<->node "+str(src_port)+" enter c_r\n")
+                            print("Enter the critical region\n")
+                            self.cri_proc = src_port
                             data = []
+                            data.append(os.getpid())
                             data.append(self.counter)
                             data.append(self.ip)
                             data.append(self.port)
-                            ok_message = Message(ACK_REPLY_TYPE,self.stateInfo,data)
+                            ok_message = MessageData(ACK_REPLY_TYPE,self.state,data)
                             self.send_message(src_ip,src_port,ok_message)
 
                 elif message.mess_type == PARK_UPDATE_TYPE:
                     stateInfo = message.state_info
                     self.state = StateInfo(stateInfo.total_num,stateInfo.entry_num,stateInfo.exit_num)
-                    for index in range(len(self.ip_list)):
-                        data = []
-                        data.append(self.counter)
-                        data.append(self.ip)
-                        data.append(self.port)
-                        update_reply_message = Message(UPDATE_REPLY_TYPE,self.stateInfo,data)
-                        #self.message2send.append(ok_message)
-                        self.send_message(self.ip_list[index],self.port_list[index],update_reply_message)
+                    data_part = message.data
+                    pro_id = data_part[0]
+                    src_ip = data_part[2]
+                    src_port = data_part[3]
+                    self.update_textplane("<->update stateinfo from node "+str(src_port)+"\n")
+                    data = []
+                    data.append(os.getpid())
+                    data.append(self.counter)
+                    data.append(self.ip)
+                    data.append(self.port)
+                    update_reply_message = MessageData(UPDATE_REPLY_TYPE,self.state,data)
+                    #self.message2send.append(ok_message)
+                    self.send_message(src_ip,src_port,update_reply_message)
                 elif message.mess_type == ACK_REPLY_TYPE:# ACK of the
                     #self.ack_critical = True #OK ,can enter the critical region
-                    self.reject_critical = False
+                    #print("RECV the ack reply type\n")
+                    self.update_textplane("<->node "+str(self.port)+" enter the c_r\n")
                     self.update_flag = False
                     ##TBD
                     self.change_state()
                     #send the update type to other nodes
+                    time.sleep(5)
+                    data = message.data
+                    pro_id = data[0]
+                    src_ip = data[2]
+                    src_port = data[3]
                     for index in range(len(self.port_list)):
+                        #print "port: "+str(self.port_list[index])
                         if not self.port_list[index] == self.port:
                             data = []
+                            data.append(os.getpid())
                             data.append(self.counter)
                             data.append(self.ip)
                             data.append(self.port)
-                            park_update_message = Message(PARK_UPDATE_TYPE,self.stateInfo,data)
+                            park_update_message = MessageData(PARK_UPDATE_TYPE,self.state,data)
+                            print "send update reply+++++++++++++++++++++++++"
+                            print "dst port: "+str(self.port_list[index])+"\n"
                             self.send_message(self.ip_list[index],self.port_list[index],park_update_message)
 
                     while True:
                         if self.update_flag:
                             break
+                    self.update_textplane("<->node "+str(self.port)+" leave the c_r\n")
                     self.update_flag = False
                     self.reject_critical = False
+                    data = []
+                    data.append(os.getpid())
+                    data.append(self.counter)
+                    data.append(self.ip)
+                    data.append(self.port)
+                    leave_message = MessageData(LEAVE_TYPE,self.state,data)
+                    self.send_message(src_ip,src_port,leave_message)
                 elif message.mess_type == LEAVE_TYPE: #release the critical region
                     if self.isCoorn:
+                        data = message.data
+                    	src_port = data[3]
+                        self.update_textplane("<->node "+str(src_port)+" leave the c_r\n")
+                        self.cri_proc = None
                         if self.wait_queue:
                             message = self.wait_queue[0]
                             self.wait_queue.remove(message)
                             wait_data = message.data
-                            src_ip = wait_data.ip
-                            src_port = wait_data.sort
+                            src_ip = wait_data[2]
+                            src_port = wait_data[3]
                             data = []
+                            data.append(os.getpid())
                             data.append(self.counter)
                             data.append(self.ip)
                             data.append(self.port)
-                            ok_message = Message(ACK_REPLY_TYPE,self.stateInfo,data)
+                            ok_message = MessageData(ACK_REPLY_TYPE,self.state,data)
                             self.send_message(src_ip,src_port,ok_message)
 
-                elif message.mess_TYPE == REJECT_REPLY_TYPE:
-                    self.reject_critical = TRUE
-                else: # mess_type == UPDATE_REPLY_TYPE:
+                elif message.mess_type == REJECT_REPLY_TYPE:
+                    self.update_textplane("<->wait to enter the c_r\n")
+                    self.reject_critical = True
+                #else: # mess_type == UPDATE_REPLY_TYPE:
                     #nothing to be processed
-                    data = message.data
-                    self.update_repley_procset.add(data.pro_id)
-                    if len(self.update_repley_procset)==(len(self.port_list)-1): #exclude the process itself
-                        self.update_flag = True
+                    #data = message.data
+                    #self.update_repley_procset.add(data[0])
+                    #if len(self.update_repley_procset)==(len(self.port_list)-1): #exclude the process itself
+                    #    self.update_flag = True
 
     def conn_proc(self,s):
         while(True):
             sock, addr = s.accept()
-            data = sock.recv(1024)
+            data = sock.recv(4068)
             message = pickle.loads(data)
-            update_lamport_clock(message)
+            #print("recv message "+str(message.mess_type))
+            self.update_lamport_clock(message)
             if message.mess_type == UPDATE_REPLY_TYPE:
                 data = message.data
-                self.update_repley_procset.add(data.pro_id)
-                if len(self.update_repley_procset)==(len(self.port_list)-1): #exclude the process itself
+                self.update_repley_procset.add(data[3])
+                if len(self.update_repley_procset)>=(len(self.port_list)-1): #exclude the process itself
+                    print ""
                     self.update_flag = True
                     self.update_repley_procset = set()
             else:
                 if message.mess_type == ACK_REPLY_TYPE:
+                    print str(self.port)+"recv ACK_REPLY_TYPE"
                     self.reject_critical = False
-            self.sort_insert2messqueue(message)
+                self.sort_insert2messqueue(message)
+
             sock.close()
 
-    def ask_for_cri(self):
+    def ack_for_cri(self):
         data = []
+        data.append(os.getpid())
         data.append(self.counter)
         data.append(self.ip)
         data.append(self.port)
-        ask_cri__message = Message(ASK_CRI_TYPE,self.stateInfo,data)
+        state = self.state
+        ack_cri_message = MessageData(ACK_CRI_TYPE,state,data)
         critical_port = max(self.port_list)
         ip_index = self.port_list.index(critical_port)
-        self.send_message(self.ip_list[ip_index],critical_port,ask_cri_message)
+        print "ip "+str(self.ip)+" port"+str(self.port)
+        print "to connect ip: "+str(self.ip_list[ip_index])+" port: "+str(critical_port)
+        self.send_message(self.ip_list[ip_index],critical_port,ack_cri_message)
 
 
     def change_state(self):
+        print("change_state********************************************\n")
         if self.end_type == 1:
-            self.state.decre_tatal_num(1)
+            if self.state.total_num>0:
+                self.state.decre_total_num(1)
+                self.text_plane.insert(1.0,"A car enter!\n")
         else:
-            self.state.incre_total_num(1)
+            if self.state.total_num < self.max_num:
+                self.state.incre_total_num(1)
+                self.text_plane.insert(1.0,"A car leave!\n")
 
     def update_textplane(self,text):
         self.text_plane.insert(1.0,text)
 
     def quit(self):
         self.frame.destroy()
-        self.frame.quit()   
-        
+        self.frame.quit()
+
     def get_state(self):
-        text = "TOTAL_NUM: "+str(self.state.tatal_num)+", ENTRY_NUM: "+str(self.state.entry_num)+", EXIT_NUM: "+str(self.state.exit_num)
+        text = "REST_NUM: "+str(self.state.total_num)+", ENTRY_NUM: "+str(self.state.entry_num)+", EXIT_NUM: "+str(self.state.exit_num)+"\n"
         self.update_textplane(text)
 
 
 
 
     def run(self):
-        time.sleep(1)
         self.frame = Tk()
-        text = "Process "+str(os.getpid())
+        text = str(self.port)
         button_text = ''
         if self.end_type == 0:
-            text += ": exit:"
+            text += ": exit"
             button_text = 'Leave now'
         else:
-            text += ": entry:"
+            text += ": entry"
             button_text = 'Enter now'
         self.frame.title(text)
-        self.frame.geometry('700x600')
-        self.text_plane = Text(self.frame)
+        #self.frame.geometry('300x200')
+        self.text_plane = Text(self.frame,height=6,width=45)
         self.text_plane.pack()
-        Button(self.frame, text=button_text,command=self.ask_for_cri).pack()
+        Button(self.frame, text=button_text,command=self.ack_for_cri).pack()
         Button(self.frame, text="State Info",command=self.get_state).pack()
-        #s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-        #time.sleep(4)
-        print 'ip port'+str(self.ip)+' '+str(self.port)
-        #s.bind((self.ip,self.port))
-        #s.listen(5)
+        s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        s.bind(('',self.port))
+        s.listen(5)
+        print('ip port'+str(self.ip)+' '+str(self.port))
         #thread to recv the message
-        #t1 = threading.Thread(target=self.conn_proc,args=(s,))
-        #t1.start()
+        t1 = threading.Thread(target=self.conn_proc,args=(s,))
+        t1.start()
         #thread to process the message
-        #t2 = threading.Thread(target=self.process_mess)
-        #t2.start()
-       # while True:
+        t2 = threading.Thread(target=self.process_mess)
+        t2.start()
+        #while True:
         #  time.sleep(1)
         #  print(1)
         self.frame.mainloop()

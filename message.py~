@@ -21,7 +21,7 @@
 
 
 class MessageData:
-    def __init__(self,mess_type,stateinfo,data):
+    def __init__(self,mess_type,stateninfo,data):
         self.mess_type = mess_type
         self.state_info = stateinfo
         self.data = data
